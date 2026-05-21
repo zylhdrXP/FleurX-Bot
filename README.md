@@ -31,6 +31,7 @@ Ensure you have the following installed and configured:
 ```env
 BOT_TOKEN="your_telegram_bot_token"
 CHAT_ID="your_telegram_chat_or_channel_id"
+PASTEBIN_API_KEY="your_pastebin_api_key" # optional, used for long changelogs
 ```
 
 ## Usage
@@ -78,7 +79,16 @@ While the script is pre-configured for the Xiaomi SM7435 (Garnet), it can be eas
 * **AnyKernel3 Repository:**
   * Locate the AnyKernel3 clone command near the bottom of the script and replace `"https://github.com/zylhdrXP/AnyKernel3"` with your preferred AnyKernel3 repository link.
 * **Telegram Integration:**
-  * `CHANGELOG_URL`: Update the link to point to your repository's commit history.
+  * `CHANGELOG_GITHUB_URL`: Update the link to point to your repository's commit history.
+
+* **Changelog Automation (Optional):**
+  * The script tracks the last built commit in `FleurX-Bot/.state/last_kernel_build_commit` and commits/pushes it to keep history across ephemeral servers.
+  * Requires git push access (token/SSH) for the FleurX-Bot repo.
+  * `STATE_REPO_PATH` (default: script directory) controls where the state file is stored.
+  * `STATE_REMOTE` (default: `origin`) and `STATE_BRANCH` (default: current branch) control where the state is pushed.
+  * `STATE_AUTO_PUSH=0` disables auto-commit/push.
+  * `CHANGELOG_MAX_LINES` (default 20) and `CHANGELOG_MAX_CHARS` (default 900) control when it uploads to Pastebin.
+  * `CHANGELOG_FALLBACK_COMMITS` (default 30) is used when no prior build commit exists.
 
 ## Repository Information
 

@@ -16,6 +16,67 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+escape_html() {
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+upload_pastebin() {
+    local content="$1"
+    local title="$2"
+
+    if [ -z "${PASTEBIN_API_KEY:-}" ]; then
+        return 1
+    fi
+
+    local response
+    response=$(curl -fsS \
+        --data-urlencode "api_paste_code=${content}" \
+        --data-urlencode "api_paste_name=${title}" \
+        --data-urlencode "api_paste_private=1" \
+        --data-urlencode "api_paste_expire_date=1W" \
+        --data-urlencode "api_option=paste" \
+        --data-urlencode "api_dev_key=${PASTEBIN_API_KEY}" \
+        "https://pastebin.com/api/api_post.php") || return 1
+
+    if printf '%s' "$response" | grep -q "^https://pastebin.com/"; then
+        printf '%s' "$response"
+        return 0
+    fi
+
+    return 1
+}
+
+persist_last_build_commit() {
+    local commit="$1"
+
+    mkdir -p "$(dirname "$STATE_FILE")"
+    printf '%s\n' "$commit" > "$STATE_FILE"
+
+    if [ "$STATE_AUTO_PUSH" != "1" ]; then
+        return 0
+    fi
+
+    if ! git -C "$STATE_REPO_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        die "State repo path $STATE_REPO_PATH is not a git repository."
+    fi
+
+    local branch="$STATE_BRANCH"
+    if [ -z "$branch" ]; then
+        branch="$(git -C "$STATE_REPO_PATH" rev-parse --abbrev-ref HEAD)"
+    fi
+    if [ "$branch" = "HEAD" ]; then
+        die "State repo is in detached HEAD. Set STATE_BRANCH to push."
+    fi
+
+    git -C "$STATE_REPO_PATH" add "$STATE_FILE_REL"
+    if git -C "$STATE_REPO_PATH" diff --cached --quiet -- "$STATE_FILE_REL"; then
+        return 0
+    fi
+    git -C "$STATE_REPO_PATH" commit -m "chore: update last kernel build commit" --only "$STATE_FILE_REL"
+    git -C "$STATE_REPO_PATH" push "$STATE_REMOTE" "$branch"
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$PWD}"
 cd "$ROOT_DIR"
 
@@ -38,6 +99,20 @@ require_cmd git
 require_cmd curl
 require_cmd zip
 require_cmd patch
+
+STATE_REPO_PATH="${STATE_REPO_PATH:-$SCRIPT_DIR}"
+STATE_FILE="${STATE_FILE:-$STATE_REPO_PATH/.state/last_kernel_build_commit}"
+STATE_REMOTE="${STATE_REMOTE:-origin}"
+STATE_BRANCH="${STATE_BRANCH:-}"
+STATE_AUTO_PUSH="${STATE_AUTO_PUSH:-1}"
+STATE_FILE_REL="${STATE_FILE#$STATE_REPO_PATH/}"
+if [ "$STATE_FILE_REL" = "$STATE_FILE" ]; then
+    die "STATE_FILE must be inside STATE_REPO_PATH."
+fi
+
+CHANGELOG_MAX_LINES="${CHANGELOG_MAX_LINES:-20}"
+CHANGELOG_MAX_CHARS="${CHANGELOG_MAX_CHARS:-900}"
+CHANGELOG_FALLBACK_COMMITS="${CHANGELOG_FALLBACK_COMMITS:-30}"
 
 # 1. Variant Selection
 echo "Select Kernel Variant:"
@@ -154,7 +229,7 @@ fi
 
 # 4. Packaging & Upload Setup
 MAKEFILE_PATH="$ROOT_DIR/kernel/xiaomi/sm7435/Makefile"
-CHANGELOG_URL="https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/lineage-23.2/"
+CHANGELOG_GITHUB_URL="https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/lineage-23.2/"
 
 if [ -f "$MAKEFILE_PATH" ]; then
     VERSION="$(awk -F' = ' '/^SUBLEVEL =/ {print $2; exit}' "$MAKEFILE_PATH")"
@@ -172,12 +247,52 @@ ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${DATE}.zip"
 ZIP_PATH="$ROOT_DIR/$ZIP_NAME"
 
 # Create formatted caption for Telegram
+LAST_BUILD_COMMIT=""
+if [ -f "$STATE_FILE" ]; then
+    LAST_BUILD_COMMIT="$(head -n1 "$STATE_FILE" | tr -d '[:space:]')"
+fi
+
+HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
+if [ -n "$LAST_BUILD_COMMIT" ] && ! git -C "$KERNEL_PATH" merge-base --is-ancestor "$LAST_BUILD_COMMIT" "$HEAD_COMMIT"; then
+    echo "Last build commit not in history. Falling back to recent commits."
+    LAST_BUILD_COMMIT=""
+fi
+
+CHANGELOG_LINES=""
+CHANGELOG_RANGE=""
+if [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" != "$HEAD_COMMIT" ]; then
+    RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
+    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+    CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --pretty=format:'- %s (%h)' "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
+elif [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" = "$HEAD_COMMIT" ]; then
+    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+    CHANGELOG_LINES="No new commits since last build."
+else
+    RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "$HEAD_COMMIT" | head -n1)"
+    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+    CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --max-count="$CHANGELOG_FALLBACK_COMMITS" --pretty=format:'- %s (%h)' "$HEAD_COMMIT")"
+fi
+
+CHANGELOG_LINE_COUNT="$(printf '%s\n' "$CHANGELOG_LINES" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+CHANGELOG_BODY=""
+if [ "$CHANGELOG_LINE_COUNT" -gt "$CHANGELOG_MAX_LINES" ] || [ "${#CHANGELOG_LINES}" -gt "$CHANGELOG_MAX_CHARS" ]; then
+    PASTEBIN_URL="$(upload_pastebin "$CHANGELOG_LINES" "FleurX ${VARIANT} ${DATE}" || true)"
+    if [ -n "$PASTEBIN_URL" ]; then
+        CHANGELOG_BODY="<a href=\"${PASTEBIN_URL}\">Pastebin Changelog</a>"
+    else
+        CHANGELOG_BODY="<a href=\"${CHANGELOG_GITHUB_URL}\">GitHub Commits</a>"
+    fi
+else
+    CHANGELOG_BODY="<pre>$(printf '%s' "$CHANGELOG_LINES" | escape_html)</pre>"
+fi
+
 CAPTION="<b>New Kernel Build is Up!</b>
 
 📱 <b>Variant:</b> ${VARIANT}
 🗓 <b>Date:</b> ${DATE}
 🔢 <b>Version:</b> 5.10.${VERSION}
-🛠 <b>Changelog:</b> <a href=\"${CHANGELOG_URL}\">GitHub Commits</a>"
+🔁 <b>Commits:</b> ${CHANGELOG_RANGE}
+🛠 <b>Changelog:</b> ${CHANGELOG_BODY}"
 
 # Clone AnyKernel3
 if [ -d "$ANYKERNEL_DIR" ]; then
@@ -228,6 +343,9 @@ if [ "$HTTP_CODE" == "200" ] && echo "$JSON_RESPONSE" | grep -q '"ok":true'; the
     echo "------------------------------------------"
     echo "Process completed successfully for $VARIANT."
     echo "------------------------------------------"
+    if [ "$HEAD_COMMIT" != "$LAST_BUILD_COMMIT" ]; then
+        persist_last_build_commit "$HEAD_COMMIT"
+    fi
 else
     echo "------------------------------------------"
     echo "Error: Upload failed with status $HTTP_CODE"
