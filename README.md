@@ -69,6 +69,7 @@ While the script is pre-configured for the Xiaomi SM7435 (Garnet), it can be eas
 
 * **Kernel Source & Branch:**
   * `KERNEL_PATH`: Change `"$ROOT_DIR/kernel/xiaomi/sm7435"` to your device's kernel path.
+  * `Cherry-Picking Droidspaces`: https://github.com/zylhdrXP/FleurX-Bot/blob/202253f6d5dd35ccbf1e301f9093c09076c0dbab/build_and_upload.sh#L124 Check the last 4 commits first to avoid any conflict https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/droidspaces/
   * `BASE_BRANCH`: Change `"lineage-23.2"` to your kernel repository's default branch.
 * **Build Paths & Naming:**
   * `KERNEL_IMG`: Update `"$ROOT_DIR/out/target/product/garnet/kernel"` to reflect your device codename.
