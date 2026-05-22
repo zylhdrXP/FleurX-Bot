@@ -494,6 +494,13 @@ ${CHANGELOG_RELEASE_SECTION}"
 else
     prepare_anykernel_dir
     build_variant "$CHOICE" "CI"
+    generate_changelog
+
+    if [ "$CHANGELOG_TOO_LONG" -eq 1 ]; then
+        CHANGELOG_CI_BODY="<a href=\"${CHANGELOG_LINK}\">Changelog</a>"
+    else
+        CHANGELOG_CI_BODY="<pre>$(printf '%s' "$CHANGELOG_LINES" | escape_html)</pre>"
+    fi
 
     read -r -p "Send build to Telegram? [y/N]: " SEND_TELEGRAM
     if [[ "$SEND_TELEGRAM" =~ ^[Yy]$ ]]; then
@@ -501,7 +508,9 @@ else
 
 📱 <b>Variant:</b> ${VARIANT}
 🗓 <b>Date:</b> ${DATE}
-🔢 <b>Version:</b> 5.10.${VERSION}"
+🔢 <b>Version:</b> 5.10.${VERSION}
+🔁 <b>Commits:</b> ${CHANGELOG_RANGE}
+🛠 <b>Changelog:</b> ${CHANGELOG_CI_BODY}"
         if ! telegram_send_document "$ZIP_PATH" "$CAPTION"; then
             die "Telegram upload failed."
         fi

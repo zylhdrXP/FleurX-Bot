@@ -61,7 +61,7 @@ GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for GitHub Releases
 The script will handle the rest, from cleaning the source tree to uploading the final zip.
 
 **Telegram behavior:**
-* Options 1-3: optional prompt to send the build file (named with `-CI-`) with a simple caption.
+* Options 1-3: optional prompt to send the build file (named with `-CI-`) with changelog included.
 * Option 4: sends a Telegram message with the GitHub Release link (no file upload).
 
 ## Advanced Configuration
