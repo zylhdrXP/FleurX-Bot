@@ -124,6 +124,29 @@ telegram_send_message() {
     return 1
 }
 
+get_next_release_version() {
+    local tags max_major=-1 max_minor=-1
+
+    tags="$(gh release list --repo "$RELEASE_REPO" --limit 200 --json tagName -q '.[].tagName')"
+    while IFS= read -r tag; do
+        tag="${tag#v}"
+        if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            local major="${BASH_REMATCH[1]}"
+            local minor="${BASH_REMATCH[2]}"
+            if [ "$major" -gt "$max_major" ] || { [ "$major" -eq "$max_major" ] && [ "$minor" -gt "$max_minor" ]; }; then
+                max_major="$major"
+                max_minor="$minor"
+            fi
+        fi
+    done <<< "$tags"
+
+    if [ "$max_major" -lt 0 ]; then
+        printf '1.0'
+    else
+        printf '%s.%s' "$max_major" "$((max_minor + 1))"
+    fi
+}
+
 set_variant_from_choice() {
     local choice="$1"
 
@@ -336,8 +359,6 @@ CHANGELOG_MAX_LINES="${CHANGELOG_MAX_LINES:-20}"
 CHANGELOG_MAX_CHARS="${CHANGELOG_MAX_CHARS:-900}"
 CHANGELOG_FALLBACK_COMMITS="${CHANGELOG_FALLBACK_COMMITS:-30}"
 RELEASE_REPO="${RELEASE_REPO:-zylhdrXP/FleurX-Release}"
-RELEASE_TAG="${RELEASE_TAG:-}"
-RELEASE_TITLE="${RELEASE_TITLE:-}"
 
 # 1. Variant Selection
 echo "Select Kernel Variant:"
@@ -426,8 +447,9 @@ if [ "$BUILD_ALL" -eq 1 ]; then
 
         VARIANT_LIST="$(printf '%s, ' "${RELEASE_VARIANTS[@]}")"
         VARIANT_LIST="${VARIANT_LIST%, }"
-        RELEASE_TAG="${RELEASE_TAG:-FleurX-5.10.${VERSION}-${DATE}}"
-        RELEASE_TITLE="${RELEASE_TITLE:-FleurX 5.10.${VERSION} (${DATE})}"
+        RELEASE_VERSION="$(get_next_release_version)"
+        RELEASE_TAG="v${RELEASE_VERSION}"
+        RELEASE_TITLE="FleurX v${RELEASE_VERSION} - 5.10.${VERSION} (${DATE})"
 
         if [ "$CHANGELOG_TOO_LONG" -eq 1 ]; then
             CHANGELOG_RELEASE_SECTION="Changelog: ${CHANGELOG_LINK}"
@@ -439,6 +461,7 @@ ${CHANGELOG_LINES}"
         fi
 
         RELEASE_NOTES="Date: ${DATE}
+Release: v${RELEASE_VERSION}
 Variants: ${VARIANT_LIST}
 Commits: ${CHANGELOG_RANGE}
 
@@ -452,6 +475,7 @@ ${CHANGELOG_RELEASE_SECTION}"
         RELEASE_URL="$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json url -q .url)"
         TELEGRAM_MESSAGE="<b>New FleurX Release</b>
 🗓 <b>Date:</b> ${DATE}
+🏷 <b>Release:</b> v${RELEASE_VERSION}
 🔢 <b>Version:</b> 5.10.${VERSION}
 📦 <b>Variants:</b> ${VARIANT_LIST}
 🔗 <b>Release:</b> <a href=\"${RELEASE_URL}\">GitHub Release</a>

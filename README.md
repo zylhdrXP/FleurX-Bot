@@ -98,7 +98,7 @@ While the script is pre-configured for the Xiaomi SM7435 (Garnet), it can be eas
   * `CHANGELOG_FALLBACK_COMMITS` (default 30) is used when no prior build commit exists.
 * **GitHub Releases (Option 4):**
   * `RELEASE_REPO` (default: `zylhdrXP/FleurX-Release`) controls the release repository.
-  * `RELEASE_TAG` and `RELEASE_TITLE` can be set to override defaults.
+  * Release tag/title are auto-generated using the next available version (`v1.0`, `v1.1`, `v1.2`, ...).
 
 ## Repository Information
 
