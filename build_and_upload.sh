@@ -80,6 +80,224 @@ persist_last_build_commit() {
     git -C "$STATE_REPO_PATH" push "$STATE_REMOTE" "$branch"
 }
 
+telegram_send_document() {
+    local file_path="$1"
+    local caption="$2"
+    local response http_code json_response
+
+    response=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+        -F "chat_id=${CHAT_ID}" \
+        -F document=@"$file_path" \
+        --form-string "caption=$caption" \
+        -F parse_mode="HTML" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument") || return 1
+
+    http_code=$(printf '%s' "$response" | awk -F: '/HTTP_STATUS/ {print $2}')
+    json_response=$(printf '%s' "$response" | sed '/HTTP_STATUS/d')
+    if [ "$http_code" == "200" ] && printf '%s' "$json_response" | grep -q '"ok":true'; then
+        return 0
+    fi
+
+    echo "Error: Telegram upload failed with status $http_code"
+    echo "Response: $json_response"
+    return 1
+}
+
+telegram_send_message() {
+    local message="$1"
+    local response http_code json_response
+
+    response=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+        -d "chat_id=${CHAT_ID}" \
+        --data-urlencode "text=${message}" \
+        -d "parse_mode=HTML" \
+        "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage") || return 1
+
+    http_code=$(printf '%s' "$response" | awk -F: '/HTTP_STATUS/ {print $2}')
+    json_response=$(printf '%s' "$response" | sed '/HTTP_STATUS/d')
+    if [ "$http_code" == "200" ] && printf '%s' "$json_response" | grep -q '"ok":true'; then
+        return 0
+    fi
+
+    echo "Error: Telegram message failed with status $http_code"
+    echo "Response: $json_response"
+    return 1
+}
+
+set_variant_from_choice() {
+    local choice="$1"
+
+    case $choice in
+        1)
+            VARIANT="KSUN"
+            BUILD_TYPE="KSUN"
+            ;;
+        2)
+            VARIANT="KSUN-Droidspaces"
+            BUILD_TYPE="KSUN-DS"
+            ;;
+        3)
+            VARIANT="Vanilla"
+            BUILD_TYPE="Vanilla"
+            ;;
+        *)
+            die "Invalid variant choice: $choice"
+            ;;
+    esac
+}
+
+clean_kernel_source() {
+    echo "Cleaning up kernel source..."
+    cd "$KERNEL_PATH" || terminate 1
+
+    if ! git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        die "Error: $KERNEL_PATH is not a git repository."
+    fi
+
+    if [ -f .git/CHERRY_PICK_HEAD ]; then
+        die "Cherry-pick in progress. Resolve or abort before running this script."
+    fi
+
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Uncommitted changes detected in $KERNEL_PATH."
+        if [ "${FORCE_CLEAN:-}" = "1" ] || [ "${DIRTY_OK:-}" = "1" ]; then
+            echo "Discarding local changes."
+        else
+            read -r -p "Discard local changes and continue? [y/N]: " CONFIRM
+            if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+                echo "Aborted."
+                terminate 1
+            fi
+            DIRTY_OK=1
+        fi
+    fi
+
+    git fetch --unshallow 2>/dev/null || true
+    git fetch origin "$BASE_BRANCH"
+    git reset --hard "origin/$BASE_BRANCH"
+    rm -rf KernelSU* susfs4ksu
+
+    cd - > /dev/null
+}
+
+apply_variant_choice() {
+    local choice="$1"
+
+    cd "$KERNEL_PATH" || terminate 1
+    if [ "$choice" == "1" ]; then
+        echo "Setting up KSUN with SUSFS..."
+        curl -fsSL "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+        git clone --depth=1 -b gki-android12-5.10 https://gitlab.com/simonpunk/susfs4ksu.git
+        cp susfs4ksu/kernel_patches/fs/* fs/
+        cp susfs4ksu/kernel_patches/include/linux/* include/linux/
+        cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch .
+        patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
+    elif [ "$choice" == "2" ]; then
+        echo "Applying Droidspaces cherry-picks and KSU-Next setup..."
+        git fetch origin droidspaces
+        git cherry-pick fa49a18078eb34467f924a848f9e6a23ef4835d7^..31cc9c443048e0e830b08b47953739eea6460402
+        curl -fsSL "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s dev
+    elif [ "$choice" == "3" ]; then
+        echo "Vanilla variant selected. Staying on clean source."
+    fi
+
+    cd - > /dev/null
+}
+
+build_kernel() {
+    echo "Running m installclean and m bootimage..."
+    THREADS="$(nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN)"
+    if ! m installclean; then
+        echo "Build clean failed! Aborting."
+        terminate 1
+    fi
+    if ! m bootimage -j"$THREADS"; then
+        echo "Build failed! Aborting."
+        terminate 1
+    fi
+}
+
+prepare_anykernel_dir() {
+    if [ -d "$ANYKERNEL_DIR" ]; then
+        rm -rf "$ANYKERNEL_DIR"
+    fi
+    git clone --depth=1 "https://github.com/zylhdrXP/AnyKernel3" "$ANYKERNEL_DIR"
+}
+
+package_zip() {
+    if [ ! -f "$KERNEL_IMG" ]; then
+        echo "Kernel image not found at $KERNEL_IMG. Aborting."
+        terminate 1
+    fi
+
+    echo "Copying kernel and zipping..."
+    rm -f "$ANYKERNEL_DIR/Image"
+    cp "$KERNEL_IMG" "$ANYKERNEL_DIR/Image"
+    cd "$ANYKERNEL_DIR" || terminate 1
+    rm -f "$ZIP_PATH"
+    zip -r "$ZIP_PATH" . -x "*.git*"
+    cd - > /dev/null
+}
+
+generate_changelog() {
+    LAST_BUILD_COMMIT=""
+    if [ -f "$STATE_FILE" ]; then
+        LAST_BUILD_COMMIT="$(head -n1 "$STATE_FILE" | tr -d '[:space:]')"
+    fi
+
+    HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
+    if [ -n "$LAST_BUILD_COMMIT" ] && ! git -C "$KERNEL_PATH" merge-base --is-ancestor "$LAST_BUILD_COMMIT" "$HEAD_COMMIT"; then
+        echo "Last build commit not in history. Falling back to recent commits."
+        LAST_BUILD_COMMIT=""
+    fi
+
+    CHANGELOG_LINES=""
+    CHANGELOG_RANGE=""
+    if [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" != "$HEAD_COMMIT" ]; then
+        RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
+        CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+        CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --pretty=format:'- %s (%h)' "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
+    elif [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" = "$HEAD_COMMIT" ]; then
+        CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+        CHANGELOG_LINES="No new commits since last build."
+    else
+        RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "$HEAD_COMMIT" | head -n1)"
+        CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
+        CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --max-count="$CHANGELOG_FALLBACK_COMMITS" --pretty=format:'- %s (%h)' "$HEAD_COMMIT")"
+    fi
+
+    CHANGELOG_LINE_COUNT="$(printf '%s\n' "$CHANGELOG_LINES" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+    CHANGELOG_TOO_LONG=0
+    CHANGELOG_LINK=""
+    if [ "$CHANGELOG_LINE_COUNT" -gt "$CHANGELOG_MAX_LINES" ] || [ "${#CHANGELOG_LINES}" -gt "$CHANGELOG_MAX_CHARS" ]; then
+        CHANGELOG_TOO_LONG=1
+        CHANGELOG_LINK="$(upload_pastebin "$CHANGELOG_LINES" "FleurX ${DATE}" || true)"
+        if [ -z "$CHANGELOG_LINK" ]; then
+            CHANGELOG_LINK="$CHANGELOG_GITHUB_URL"
+        fi
+    fi
+}
+
+build_variant() {
+    local choice="$1"
+    local ci_suffix="$2"
+
+    set_variant_from_choice "$choice"
+    clean_kernel_source
+    HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
+    apply_variant_choice "$choice"
+    build_kernel
+
+    if [ -n "$ci_suffix" ]; then
+        ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${ci_suffix}-${DATE}.zip"
+    else
+        ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${DATE}.zip"
+    fi
+    ZIP_PATH="$ROOT_DIR/$ZIP_NAME"
+
+    package_zip
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$PWD}"
 cd "$ROOT_DIR"
@@ -117,37 +335,39 @@ fi
 CHANGELOG_MAX_LINES="${CHANGELOG_MAX_LINES:-20}"
 CHANGELOG_MAX_CHARS="${CHANGELOG_MAX_CHARS:-900}"
 CHANGELOG_FALLBACK_COMMITS="${CHANGELOG_FALLBACK_COMMITS:-30}"
+RELEASE_REPO="${RELEASE_REPO:-zylhdrXP/FleurX-Release}"
+RELEASE_TAG="${RELEASE_TAG:-}"
+RELEASE_TITLE="${RELEASE_TITLE:-}"
 
 # 1. Variant Selection
 echo "Select Kernel Variant:"
 echo "1) KSUN (Default)"
 echo "2) KSUN-Droidspaces"
 echo "3) Vanilla (Non-Root)"
-read -r -p "Enter choice [1-3]: " CHOICE
+echo "4) Build All Variants (Release)"
+read -r -p "Enter choice [1-4]: " CHOICE
 
+BUILD_ALL=0
 case $CHOICE in
-    1)
-        VARIANT="KSUN"
-        BUILD_TYPE="KSUN"
+    1|2|3)
+        set_variant_from_choice "$CHOICE"
         ;;
-    2)
-        VARIANT="KSUN-Droidspaces"
-        BUILD_TYPE="KSUN-DS"
-        ;;
-    3)
-        VARIANT="Vanilla"
-        BUILD_TYPE="Vanilla"
+    4)
+        BUILD_ALL=1
         ;;
     *)
         echo "Invalid choice. Defaulting to KSUN."
-        VARIANT="KSUN"
-        BUILD_TYPE="KSUN"
         CHOICE=1
+        set_variant_from_choice "$CHOICE"
         ;;
 esac
 
 echo "------------------------------------------"
-echo "Preparing $VARIANT build..."
+if [ "$BUILD_ALL" -eq 1 ]; then
+    echo "Preparing all variants build..."
+else
+    echo "Preparing $VARIANT build..."
+fi
 echo "------------------------------------------"
 
 # 2. Kernel Source Preparation (Unified Cleanup)
@@ -158,58 +378,6 @@ if [ ! -d "$KERNEL_PATH" ]; then
     die "Error: Kernel path $KERNEL_PATH not found!"
 fi
 
-echo "Cleaning up kernel source..."
-cd "$KERNEL_PATH" || terminate 1
-
-if ! git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    die "Error: $KERNEL_PATH is not a git repository."
-fi
-
-if [ -f .git/CHERRY_PICK_HEAD ]; then
-    die "Cherry-pick in progress. Resolve or abort before running this script."
-fi
-
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Uncommitted changes detected in $KERNEL_PATH."
-    if [ "${FORCE_CLEAN:-}" = "1" ]; then
-        echo "FORCE_CLEAN=1 set. Discarding local changes."
-    else
-        read -r -p "Discard local changes and continue? [y/N]: " CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-            echo "Aborted."
-            terminate 1
-        fi
-    fi
-fi
-
-git fetch --unshallow 2>/dev/null || true
-git fetch origin "$BASE_BRANCH"
-git reset --hard "origin/$BASE_BRANCH"
-rm -rf KernelSU* susfs4ksu
-
-# 3. Apply Variant Specific Logic
-if [ "$CHOICE" == "1" ]; then
-    echo "Setting up KSUN with SUSFS..."
-    curl -fsSL "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-    git clone --depth=1 -b gki-android12-5.10 https://gitlab.com/simonpunk/susfs4ksu.git
-    cp susfs4ksu/kernel_patches/fs/* fs/
-    cp susfs4ksu/kernel_patches/include/linux/* include/linux/
-    cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch .
-    patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
-
-elif [ "$CHOICE" == "2" ]; then
-    echo "Applying Droidspaces cherry-picks and KSU-Next setup..."
-    git fetch origin droidspaces
-    git cherry-pick fa49a18078eb34467f924a848f9e6a23ef4835d7^..31cc9c443048e0e830b08b47953739eea6460402
-    curl -fsSL "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s dev
-
-elif [ "$CHOICE" == "3" ]; then
-    echo "Vanilla variant selected. Staying on clean source."
-fi
-
-# Return to root and execute build
-cd - > /dev/null
-
 if ! type -t m >/dev/null 2>&1; then
     die "m build command not found. Please source build/envsetup.sh before running."
 fi
@@ -218,17 +386,6 @@ if type -t croot >/dev/null 2>&1; then
     croot
 else
     cd "$ROOT_DIR"
-fi
-
-echo "Running m installclean and m bootimage..."
-THREADS="$(nproc --all 2>/dev/null || getconf _NPROCESSORS_ONLN)"
-if ! m installclean; then
-    echo "Build clean failed! Aborting."
-    terminate 1
-fi
-if ! m bootimage -j"$THREADS"; then
-    echo "Build failed! Aborting."
-    terminate 1
 fi
 
 # 4. Packaging & Upload Setup
@@ -247,115 +404,87 @@ fi
 DATE=$(date +"%d%m%y")
 KERNEL_IMG="$ROOT_DIR/out/target/product/garnet/kernel"
 ANYKERNEL_DIR="$ROOT_DIR/AnyKernel3"
-ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${DATE}.zip"
-ZIP_PATH="$ROOT_DIR/$ZIP_NAME"
+if [ "$BUILD_ALL" -eq 1 ]; then
+    clean_kernel_source
+    generate_changelog
+    prepare_anykernel_dir
 
-# Create formatted caption for Telegram
-LAST_BUILD_COMMIT=""
-if [ -f "$STATE_FILE" ]; then
-    LAST_BUILD_COMMIT="$(head -n1 "$STATE_FILE" | tr -d '[:space:]')"
-fi
+    RELEASE_ASSETS=()
+    RELEASE_VARIANTS=()
+    for variant_choice in 1 2 3; do
+        build_variant "$variant_choice" ""
+        RELEASE_ASSETS+=("$ZIP_PATH")
+        RELEASE_VARIANTS+=("$VARIANT")
+    done
 
-HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
-if [ -n "$LAST_BUILD_COMMIT" ] && ! git -C "$KERNEL_PATH" merge-base --is-ancestor "$LAST_BUILD_COMMIT" "$HEAD_COMMIT"; then
-    echo "Last build commit not in history. Falling back to recent commits."
-    LAST_BUILD_COMMIT=""
-fi
+    read -r -p "Upload GitHub release? [y/N]: " RELEASE_CONFIRM
+    if [[ "$RELEASE_CONFIRM" =~ ^[Yy]$ ]]; then
+        require_cmd gh
+        if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+            die "GH_TOKEN or GITHUB_TOKEN must be set to create GitHub releases."
+        fi
 
-CHANGELOG_LINES=""
-CHANGELOG_RANGE=""
-if [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" != "$HEAD_COMMIT" ]; then
-    RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
-    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
-    CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --pretty=format:'- %s (%h)' "${LAST_BUILD_COMMIT}..${HEAD_COMMIT}")"
-elif [ -n "$LAST_BUILD_COMMIT" ] && [ "$LAST_BUILD_COMMIT" = "$HEAD_COMMIT" ]; then
-    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
-    CHANGELOG_LINES="No new commits since last build."
-else
-    RANGE_START="$(git -C "$KERNEL_PATH" rev-list --reverse --max-count=1 "$HEAD_COMMIT" | head -n1)"
-    CHANGELOG_RANGE="$(git -C "$KERNEL_PATH" rev-parse --short "$RANGE_START")..$(git -C "$KERNEL_PATH" rev-parse --short "$HEAD_COMMIT")"
-    CHANGELOG_LINES="$(git -C "$KERNEL_PATH" log --reverse --max-count="$CHANGELOG_FALLBACK_COMMITS" --pretty=format:'- %s (%h)' "$HEAD_COMMIT")"
-fi
+        VARIANT_LIST="$(printf '%s, ' "${RELEASE_VARIANTS[@]}")"
+        VARIANT_LIST="${VARIANT_LIST%, }"
+        RELEASE_TAG="${RELEASE_TAG:-FleurX-5.10.${VERSION}-${DATE}}"
+        RELEASE_TITLE="${RELEASE_TITLE:-FleurX 5.10.${VERSION} (${DATE})}"
 
-CHANGELOG_LINE_COUNT="$(printf '%s\n' "$CHANGELOG_LINES" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-CHANGELOG_BODY=""
-if [ "$CHANGELOG_LINE_COUNT" -gt "$CHANGELOG_MAX_LINES" ] || [ "${#CHANGELOG_LINES}" -gt "$CHANGELOG_MAX_CHARS" ]; then
-    PASTEBIN_URL="$(upload_pastebin "$CHANGELOG_LINES" "FleurX ${VARIANT} ${DATE}" || true)"
-    if [ -n "$PASTEBIN_URL" ]; then
-        CHANGELOG_BODY="<a href=\"${PASTEBIN_URL}\">Pastebin Changelog</a>"
+        if [ "$CHANGELOG_TOO_LONG" -eq 1 ]; then
+            CHANGELOG_RELEASE_SECTION="Changelog: ${CHANGELOG_LINK}"
+            CHANGELOG_TELEGRAM_SECTION="<a href=\"${CHANGELOG_LINK}\">Changelog</a>"
+        else
+            CHANGELOG_RELEASE_SECTION="Changelog:
+${CHANGELOG_LINES}"
+            CHANGELOG_TELEGRAM_SECTION="<pre>$(printf '%s' "$CHANGELOG_LINES" | escape_html)</pre>"
+        fi
+
+        RELEASE_NOTES="Date: ${DATE}
+Variants: ${VARIANT_LIST}
+Commits: ${CHANGELOG_RANGE}
+
+${CHANGELOG_RELEASE_SECTION}"
+
+        gh release create "$RELEASE_TAG" "${RELEASE_ASSETS[@]}" \
+            --repo "$RELEASE_REPO" \
+            --title "$RELEASE_TITLE" \
+            --notes "$RELEASE_NOTES"
+
+        RELEASE_URL="$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json url -q .url)"
+        TELEGRAM_MESSAGE="<b>New FleurX Release</b>
+🗓 <b>Date:</b> ${DATE}
+🔢 <b>Version:</b> 5.10.${VERSION}
+📦 <b>Variants:</b> ${VARIANT_LIST}
+🔗 <b>Release:</b> <a href=\"${RELEASE_URL}\">GitHub Release</a>
+🛠 <b>Changelog:</b> ${CHANGELOG_TELEGRAM_SECTION}"
+
+        if ! telegram_send_message "$TELEGRAM_MESSAGE"; then
+            die "Telegram release message failed."
+        fi
+
+        if [ -n "$HEAD_COMMIT" ]; then
+            persist_last_build_commit "$HEAD_COMMIT"
+        fi
     else
-        CHANGELOG_BODY="<a href=\"${CHANGELOG_GITHUB_URL}\">GitHub Commits</a>"
+        echo "Skipping GitHub release."
     fi
 else
-    CHANGELOG_BODY="<pre>$(printf '%s' "$CHANGELOG_LINES" | escape_html)</pre>"
-fi
+    prepare_anykernel_dir
+    build_variant "$CHOICE" "CI"
 
-CAPTION="<b>New Kernel Build is Up!</b>
+    read -r -p "Send build to Telegram? [y/N]: " SEND_TELEGRAM
+    if [[ "$SEND_TELEGRAM" =~ ^[Yy]$ ]]; then
+        CAPTION="<b>CI Kernel Build</b>
 
 📱 <b>Variant:</b> ${VARIANT}
 🗓 <b>Date:</b> ${DATE}
-🔢 <b>Version:</b> 5.10.${VERSION}
-🔁 <b>Commits:</b> ${CHANGELOG_RANGE}
-🛠 <b>Changelog:</b> ${CHANGELOG_BODY}"
-
-# Clone AnyKernel3
-if [ -d "$ANYKERNEL_DIR" ]; then
-    rm -rf "$ANYKERNEL_DIR"
-fi
-git clone --depth=1 "https://github.com/zylhdrXP/AnyKernel3" "$ANYKERNEL_DIR"
-
-# Move Kernel & Zip
-if [ ! -f "$KERNEL_IMG" ]; then
-    echo "Kernel image not found at $KERNEL_IMG. Aborting."
-    terminate 1
-fi
-
-echo "Copying kernel and zipping..."
-rm -f "$ANYKERNEL_DIR/Image"
-cp "$KERNEL_IMG" "$ANYKERNEL_DIR/Image"
-cd "$ANYKERNEL_DIR" || terminate 1
-rm -f "$ZIP_PATH"
-zip -r "$ZIP_PATH" . -x "*.git*"
-cd ..
-
-# 5. Upload to Telegram
-echo "Uploading $VARIANT build to Telegram..."
-UPLOAD_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendDocument"
-if ! RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
-    -F "chat_id=${CHAT_ID}" \
-    -F document=@"$ZIP_PATH" \
-    --form-string "caption=$CAPTION" \
-    -F parse_mode="HTML" \
-    "$UPLOAD_URL"); then
-    echo "------------------------------------------"
-    echo "Error: Upload request failed."
-    echo "------------------------------------------"
-    terminate 1
-fi
-
-HTTP_CODE=$(printf '%s' "$RESPONSE" | awk -F: '/HTTP_STATUS/ {print $2}')
-JSON_RESPONSE=$(printf '%s' "$RESPONSE" | sed '/HTTP_STATUS/d')
-if [ -z "$HTTP_CODE" ]; then
-    echo "------------------------------------------"
-    echo "Error: Unable to parse HTTP status from response."
-    echo "Response: $RESPONSE"
-    echo "------------------------------------------"
-    terminate 1
-fi
-
-if [ "$HTTP_CODE" == "200" ] && echo "$JSON_RESPONSE" | grep -q '"ok":true'; then
-    echo "------------------------------------------"
-    echo "Process completed successfully for $VARIANT."
-    echo "------------------------------------------"
-    if [ "$HEAD_COMMIT" != "$LAST_BUILD_COMMIT" ]; then
-        persist_last_build_commit "$HEAD_COMMIT"
+🔢 <b>Version:</b> 5.10.${VERSION}"
+        if ! telegram_send_document "$ZIP_PATH" "$CAPTION"; then
+            die "Telegram upload failed."
+        fi
+        if [ -n "$HEAD_COMMIT" ]; then
+            persist_last_build_commit "$HEAD_COMMIT"
+        fi
     fi
-else
-    echo "------------------------------------------"
-    echo "Error: Upload failed with status $HTTP_CODE"
-    echo "Response: $JSON_RESPONSE"
-    echo "------------------------------------------"
-    terminate 1
 fi
 
 # Prevent session from closing immediately (interactive shells only)

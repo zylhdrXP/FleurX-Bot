@@ -22,6 +22,7 @@ Ensure you have the following installed and configured:
 * A fully set up Android build environment (the script relies on `m` and `croot` commands provided by `build/envsetup.sh`).
 * Standard system utilities: `bash`, `git`, `curl`, `zip`, `patch`.
 * A Telegram Bot Token (created via BotFather).
+* `gh` (GitHub CLI) if you want to publish GitHub Releases (option 4).
 
 ## Setup
 
@@ -32,6 +33,7 @@ Ensure you have the following installed and configured:
 BOT_TOKEN="your_telegram_bot_token"
 CHAT_ID="your_telegram_chat_or_channel_id"
 PASTEBIN_API_KEY="your_pastebin_api_key" # optional, used for long changelogs
+GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for GitHub Releases (option 4)
 ```
 
 ## Usage
@@ -53,9 +55,14 @@ PASTEBIN_API_KEY="your_pastebin_api_key" # optional, used for long changelogs
    1) KSUN (Default)
    2) KSUN-Droidspaces
    3) Vanilla (Non-Root)
+   4) Build All Variants (Release)
    ```
 
 The script will handle the rest, from cleaning the source tree to uploading the final zip.
+
+**Telegram behavior:**
+* Options 1-3: optional prompt to send the build file (named with `-CI-`) with a simple caption.
+* Option 4: sends a Telegram message with the GitHub Release link (no file upload).
 
 ## Advanced Configuration
 
@@ -89,6 +96,9 @@ While the script is pre-configured for the Xiaomi SM7435 (Garnet), it can be eas
   * `STATE_AUTO_PUSH=0` disables auto-commit/push.
   * `CHANGELOG_MAX_LINES` (default 20) and `CHANGELOG_MAX_CHARS` (default 900) control when it uploads to Pastebin.
   * `CHANGELOG_FALLBACK_COMMITS` (default 30) is used when no prior build commit exists.
+* **GitHub Releases (Option 4):**
+  * `RELEASE_REPO` (default: `zylhdrXP/FleurX-Release`) controls the release repository.
+  * `RELEASE_TAG` and `RELEASE_TITLE` can be set to override defaults.
 
 ## Repository Information
 
