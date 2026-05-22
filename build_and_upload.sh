@@ -39,8 +39,12 @@ upload_pastebin() {
         "https://pastebin.com/api/api_post.php") || return 1
 
     if printf '%s' "$response" | grep -q "^https://pastebin.com/"; then
-        printf '%s' "$response"
-        return 0
+        local paste_id
+        paste_id="$(printf '%s' "$response" | sed -n 's#^https://pastebin.com/##p')"
+        if [ -n "$paste_id" ]; then
+            printf 'https://pastebin.com/raw/%s' "$paste_id"
+            return 0
+        fi
     fi
 
     return 1
