@@ -133,16 +133,17 @@ get_next_release_version() {
 
     if [ -n "$tags" ]; then
         while IFS= read -r tag; do
-        tag="${tag#v}"
-        if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
-            local major="${BASH_REMATCH[1]}"
-            local minor="${BASH_REMATCH[2]}"
-            if [ "$major" -gt "$max_major" ] || { [ "$major" -eq "$max_major" ] && [ "$minor" -gt "$max_minor" ]; }; then
-                max_major="$major"
-                max_minor="$minor"
+            tag="${tag#v}"
+            if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+                local major="${BASH_REMATCH[1]}"
+                local minor="${BASH_REMATCH[2]}"
+                if [ "$major" -gt "$max_major" ] || { [ "$major" -eq "$max_major" ] && [ "$minor" -gt "$max_minor" ]; }; then
+                    max_major="$major"
+                    max_minor="$minor"
+                fi
             fi
-        fi
-    done <<< "$tags"
+        done <<< "$tags"
+    fi
 
     if [ "$max_major" -lt 0 ]; then
         printf '1.0'
