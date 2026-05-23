@@ -125,10 +125,14 @@ telegram_send_message() {
 }
 
 get_next_release_version() {
-    local tags max_major=-1 max_minor=-1
+    local tags="" max_major=-1 max_minor=-1
 
-    tags="$(gh release list --repo "$RELEASE_REPO" --limit 200 --json tagName -q '.[].tagName')"
-    while IFS= read -r tag; do
+    if command -v gh >/dev/null 2>&1; then
+        tags="$(gh release list --repo "$RELEASE_REPO" --limit 200 --json tagName -q '.[].tagName' 2>/dev/null || true)"
+    fi
+
+    if [ -n "$tags" ]; then
+        while IFS= read -r tag; do
         tag="${tag#v}"
         if [[ "$tag" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
             local major="${BASH_REMATCH[1]}"
@@ -314,7 +318,7 @@ build_variant() {
     if [ -n "$ci_suffix" ]; then
         ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${ci_suffix}-${DATE}.zip"
     else
-        ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${DATE}.zip"
+        ZIP_NAME="FleurX-v${RELEASE_VERSION}-5.10.${VERSION}-${BUILD_TYPE}-${DATE}.zip"
     fi
     ZIP_PATH="$ROOT_DIR/$ZIP_NAME"
 
@@ -433,6 +437,7 @@ DATE=$(date +"%d%m%y")
 KERNEL_IMG="$ROOT_DIR/out/target/product/garnet/kernel"
 ANYKERNEL_DIR="$ROOT_DIR/AnyKernel3"
 if [ "$BUILD_ALL" -eq 1 ]; then
+    RELEASE_VERSION="$(get_next_release_version)"
     clean_kernel_source
     generate_changelog
     prepare_anykernel_dir
@@ -454,7 +459,6 @@ if [ "$BUILD_ALL" -eq 1 ]; then
 
         VARIANT_LIST="$(printf '%s, ' "${RELEASE_VARIANTS[@]}")"
         VARIANT_LIST="${VARIANT_LIST%, }"
-        RELEASE_VERSION="$(get_next_release_version)"
         RELEASE_TAG="v${RELEASE_VERSION}"
         RELEASE_TITLE="FleurX v${RELEASE_VERSION} - 5.10.${VERSION} (${DATE})"
 
