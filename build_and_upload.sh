@@ -393,7 +393,14 @@ echo "------------------------------------------"
 
 # 2. Kernel Source Preparation (Unified Cleanup)
 KERNEL_PATH="$ROOT_DIR/kernel/xiaomi/sm7435"
-BASE_BRANCH="lineage-23.2"
+if git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    BASE_BRANCH="$(git -C "$KERNEL_PATH" rev-parse --abbrev-ref HEAD)"
+    if [ "$BASE_BRANCH" = "HEAD" ] || [ -z "$BASE_BRANCH" ]; then
+        BASE_BRANCH="lineage-23.2"
+    fi
+else
+    BASE_BRANCH="lineage-23.2"
+fi
 
 if [ ! -d "$KERNEL_PATH" ]; then
     die "Error: Kernel path $KERNEL_PATH not found!"
@@ -462,6 +469,7 @@ ${CHANGELOG_LINES}"
 
         RELEASE_NOTES="Date: ${DATE}
 Release: v${RELEASE_VERSION}
+Branch: ${BASE_BRANCH}
 Variants: ${VARIANT_LIST}
 Commits: ${CHANGELOG_RANGE}
 
@@ -477,6 +485,7 @@ ${CHANGELOG_RELEASE_SECTION}"
 🗓 <b>Date:</b> ${DATE}
 🏷 <b>Release:</b> v${RELEASE_VERSION}
 🔢 <b>Version:</b> 5.10.${VERSION}
+🌳 <b>Branch:</b> ${BASE_BRANCH}
 📦 <b>Variants:</b> ${VARIANT_LIST}
 🔗 <b>Release:</b> <a href=\"${RELEASE_URL}\">GitHub Release</a>
 🛠 <b>Changelog:</b> ${CHANGELOG_TELEGRAM_SECTION}"
@@ -509,6 +518,7 @@ else
 📱 <b>Variant:</b> ${VARIANT}
 🗓 <b>Date:</b> ${DATE}
 🔢 <b>Version:</b> 5.10.${VERSION}
+🌳 <b>Branch:</b> ${BASE_BRANCH}
 🔁 <b>Commits:</b> ${CHANGELOG_RANGE}
 🛠 <b>Changelog:</b> ${CHANGELOG_CI_BODY}"
         if ! telegram_send_document "$ZIP_PATH" "$CAPTION"; then
