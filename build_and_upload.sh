@@ -439,10 +439,10 @@ KERNEL_PATH="$ROOT_DIR/kernel/xiaomi/sm7435"
 if git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     BASE_BRANCH="$(git -C "$KERNEL_PATH" rev-parse --abbrev-ref HEAD)"
     if [ "$BASE_BRANCH" = "HEAD" ] || [ -z "$BASE_BRANCH" ]; then
-        BASE_BRANCH="lineage-23.2"
+        BASE_BRANCH="linux-stable"
     fi
 else
-    BASE_BRANCH="lineage-23.2"
+    BASE_BRANCH="linux-stable"
 fi
 
 if [ ! -d "$KERNEL_PATH" ]; then
