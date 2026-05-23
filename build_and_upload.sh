@@ -311,10 +311,14 @@ build_variant() {
     local ci_suffix="$2"
 
     set_variant_from_choice "$choice"
-    clean_kernel_source
-    HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
-    apply_variant_choice "$choice"
-    build_kernel
+    if [ "${SKIP_BUILD:-0}" != "1" ]; then
+        clean_kernel_source
+        HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
+        apply_variant_choice "$choice"
+        build_kernel
+    else
+        HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
+    fi
 
     if [ -n "$ci_suffix" ]; then
         ZIP_NAME="FleurX-5.10.${VERSION}-${BUILD_TYPE}-${ci_suffix}-${DATE}.zip"
@@ -323,7 +327,19 @@ build_variant() {
     fi
     ZIP_PATH="$ROOT_DIR/$ZIP_NAME"
 
-    package_zip
+    if [ "${SKIP_BUILD:-0}" != "1" ]; then
+        package_zip
+    else
+        if [ ! -f "$ZIP_PATH" ]; then
+            echo "Warning: ZIP file not found at $ZIP_PATH"
+            read -r -p "Enter manual path to ZIP file for $VARIANT (or press Enter to fail): " MANUAL_ZIP
+            if [ -n "$MANUAL_ZIP" ] && [ -f "$MANUAL_ZIP" ]; then
+                ZIP_PATH="$MANUAL_ZIP"
+            else
+                die "Error: ZIP file not found for $VARIANT."
+            fi
+        fi
+    fi
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -371,15 +387,34 @@ echo "1) KSUN (Default)"
 echo "2) KSUN-Droidspaces"
 echo "3) Vanilla (Non-Root)"
 echo "4) Build All Variants (Release)"
-read -r -p "Enter choice [1-4]: " CHOICE
+echo "5) Release Only (Upload Existing ZIPs)"
+read -r -p "Enter choice [1-5]: " CHOICE
 
 BUILD_ALL=0
+SKIP_BUILD=0
 case $CHOICE in
     1|2|3)
         set_variant_from_choice "$CHOICE"
         ;;
     4)
         BUILD_ALL=1
+        ;;
+    5)
+        SKIP_BUILD=1
+        echo "Release Only mode selected."
+        echo "1) CI Upload (Single ZIP)"
+        echo "2) GitHub Release (All Variants)"
+        read -r -p "Select release type [1-2]: " REL_TYPE
+        if [ "$REL_TYPE" == "2" ]; then
+            BUILD_ALL=1
+        else
+            echo "Select Variant for CI Upload:"
+            echo "1) KSUN"
+            echo "2) KSUN-Droidspaces"
+            echo "3) Vanilla"
+            read -r -p "Choice [1-3]: " CHOICE
+            set_variant_from_choice "$CHOICE"
+        fi
         ;;
     *)
         echo "Invalid choice. Defaulting to KSUN."
@@ -389,8 +424,11 @@ case $CHOICE in
 esac
 
 echo "------------------------------------------"
+if [ "$SKIP_BUILD" -eq 1 ]; then
+    echo "Release Only mode enabled."
+fi
 if [ "$BUILD_ALL" -eq 1 ]; then
-    echo "Preparing all variants build..."
+    echo "Preparing all variants release..."
 else
     echo "Preparing $VARIANT build..."
 fi
@@ -439,9 +477,13 @@ KERNEL_IMG="$ROOT_DIR/out/target/product/garnet/kernel"
 ANYKERNEL_DIR="$ROOT_DIR/AnyKernel3"
 if [ "$BUILD_ALL" -eq 1 ]; then
     RELEASE_VERSION="$(get_next_release_version)"
-    clean_kernel_source
+    if [ "$SKIP_BUILD" != "1" ]; then
+        clean_kernel_source
+    fi
     generate_changelog
-    prepare_anykernel_dir
+    if [ "$SKIP_BUILD" != "1" ]; then
+        prepare_anykernel_dir
+    fi
 
     RELEASE_ASSETS=()
     RELEASE_VARIANTS=()
@@ -506,7 +548,9 @@ ${CHANGELOG_RELEASE_SECTION}"
         echo "Skipping GitHub release."
     fi
 else
-    prepare_anykernel_dir
+    if [ "$SKIP_BUILD" != "1" ]; then
+        prepare_anykernel_dir
+    fi
     build_variant "$CHOICE" "CI"
     generate_changelog
 
