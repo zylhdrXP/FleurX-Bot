@@ -10,9 +10,12 @@ This utility automates the process of syncing the kernel source, applying specif
   * **KSUN (Default):** Includes KernelSU-Next and SUSFS for advanced root management and hiding.
   * **KSUN-Droidspaces:** Includes KernelSU-Next with specific Droidspaces cherry-picks.
   * **Vanilla:** A standard, non-rooted kernel build.
+* **Automated Branch Detection:** Dynamically detects the current kernel branch (e.g., `lineage-23.2` or `linux-stable`) and includes it in release notes and Telegram captions.
+* **Automated Versioning:** Automatically calculates the next release version based on existing GitHub tags and incorporates it into ZIP filenames for full releases (e.g., `FleurX-v1.1-...`).
+* **Release Only Mode:** Option to upload existing ZIP files to Telegram or GitHub without rebuilding (Choice 5).
 * **Automated Source Management:** Automatically resets the tree, handles shallow/unshallow clones, and applies required patches.
 * **AnyKernel3 Packaging:** Generates a ready-to-flash zip file upon successful compilation.
-* **Telegram Integration:** Automatically formats a changelog and uploads the completed build to Telegram.
+* **Telegram Integration:** Automatically formats a changelog and uploads the completed build to Telegram with detailed metadata (Branch, Version, Variant, Commits).
 
 ## Prerequisites
 
@@ -22,26 +25,26 @@ Ensure you have the following installed and configured:
 * A fully set up Android build environment (the script relies on `m` and `croot` commands provided by `build/envsetup.sh`).
 * Standard system utilities: `bash`, `git`, `curl`, `zip`, `patch`.
 * A Telegram Bot Token (created via BotFather).
-* `gh` (GitHub CLI) if you want to publish GitHub Releases (option 4).
+* `gh` (GitHub CLI) for automated versioning and publishing GitHub Releases (option 4 and 5).
 
 ## Setup
 
 1. Clone the script from the root of your Android build tree.
-2. Create a `.env` file in the root of Android build tree to store your Telegram credentials:
+2. Create a `.env` file in the root of Android build tree to store your credentials:
 
 ```env
 BOT_TOKEN="your_telegram_bot_token"
 CHAT_ID="your_telegram_chat_or_channel_id"
 PASTEBIN_API_KEY="your_pastebin_api_key" # optional, used for long changelogs
-GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for GitHub Releases (option 4)
+GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for releases and versioning
 ```
 
 ## Usage
 
-1. Initialize your build environment if you haven't already:
+1. Initialize your build environment:
    ```bash
    source build/envsetup.sh
-   lunch lineage_garnet-userdebug # or your specific lunch target
+   lunch lineage_garnet-userdebug
    ```
 
 2. Execute the build script:
@@ -49,59 +52,52 @@ GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for GitHub Releases
    ./FleurX-Bot/build_and_upload.sh
    ```
 
-3. Follow the interactive prompt to select your desired kernel variant:
+3. Follow the interactive prompt:
    ```text
    Select Kernel Variant:
    1) KSUN (Default)
    2) KSUN-Droidspaces
    3) Vanilla (Non-Root)
    4) Build All Variants (Release)
+   5) Release Only (Upload Existing ZIPs)
    ```
 
-The script will handle the rest, from cleaning the source tree to uploading the final zip.
-
-**Telegram behavior:**
-* Options 1-3: optional prompt to send the build file (named with `-CI-`) with changelog included.
-* Option 4: sends a Telegram message with the GitHub Release link (no file upload).
-
-## Advanced Configuration
-
-* **FORCE_CLEAN:** If you want to bypass the interactive prompt when uncommitted changes are detected in the kernel source, you can set `FORCE_CLEAN=1` before running the script.
-  ```bash
-  FORCE_CLEAN=1 ./FleurX-Bot//build_and_upload.sh
-  ```
+**Mode Behaviors:**
+* **Options 1-3:** Build a single variant, prompt for Telegram CI upload.
+* **Option 4:** Builds all variants sequentially and creates a full GitHub Release + Telegram announcement.
+* **Option 5:** Skips all build steps. Prompts to upload a single ZIP to Telegram or all variants to a new GitHub Release.
 
 ## Adapting for Other Devices
 
-While the script is pre-configured for the Xiaomi SM7435 (Garnet), it can be easily modified for other devices, kernel sources, or AnyKernel3 configurations. Open `build_and_upload.sh` and update the following variables to match your environment:
+Update the following variables in `build_and_upload.sh` to match your environment:
 
 * **Kernel Source & Branch:**
-  * `KERNEL_PATH`: Change `"$ROOT_DIR/kernel/xiaomi/sm7435"` to your device's kernel path.
-  * `Cherry-Picking Droidspaces`: https://github.com/zylhdrXP/FleurX-Bot/blob/202253f6d5dd35ccbf1e301f9093c09076c0dbab/build_and_upload.sh#L124 Check the last 4 commits first to avoid any conflict https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/droidspaces/
-  * `BASE_BRANCH`: Change `"lineage-23.2"` to your kernel repository's default branch.
+  * `KERNEL_PATH`: Change path to your device's kernel path.
+  * `Cherry-Picking Droidspaces`: [Check commits here](https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/droidspaces/) and update the range in `apply_variant_choice` if needed.
+  * `BASE_BRANCH`: Now automatically detected via `git rev-parse`. Fallback defaults to `lineage-23.2`.
 * **Build Paths & Naming:**
-  * `KERNEL_IMG`: Update `"$ROOT_DIR/out/target/product/garnet/kernel"` to reflect your device codename.
+  * `KERNEL_IMG`: Update to your device's kernel output path (e.g., `out/target/product/codename/kernel`).
   * `MAKEFILE_PATH`: Ensure this points to the `Makefile` inside your target `KERNEL_PATH`.
-  * `ZIP_NAME`: Modify the base name (e.g., `FleurX`) to match your project.
+  * `ZIP_NAME`: Modify the base name (e.g., `FleurX`) in `build_variant`.
 * **AnyKernel3 Repository:**
-  * Locate the AnyKernel3 clone command near the bottom of the script and replace `"https://github.com/zylhdrXP/AnyKernel3"` with your preferred AnyKernel3 repository link.
+  * Update the URL in `prepare_anykernel_dir`.
 * **Telegram Integration:**
   * `CHANGELOG_GITHUB_URL`: Update the link to point to your repository's commit history.
 
 * **Changelog Automation (Optional):**
-  * The script tracks the last built commit in `FleurX-Bot/.state/last_kernel_build_commit` and commits/pushes it to keep history across ephemeral servers.
-  * Requires git push access (token/SSH) for the FleurX-Bot repo.
+  * The script tracks the last built commit in `.state/last_kernel_build_commit` and can auto-push it.
   * `STATE_REPO_PATH` (default: script directory) controls where the state file is stored.
-  * `STATE_REMOTE` (default: `origin`) and `STATE_BRANCH` (default: current branch) control where the state is pushed.
+  * `STATE_REMOTE` (default: `origin`) and `STATE_BRANCH` control where the state is pushed.
   * `STATE_AUTO_PUSH=0` disables auto-commit/push.
   * `CHANGELOG_MAX_LINES` (default 20) and `CHANGELOG_MAX_CHARS` (default 900) control when it uploads to Pastebin.
   * `CHANGELOG_FALLBACK_COMMITS` (default 30) is used when no prior build commit exists.
-* **GitHub Releases (Option 4):**
+* **GitHub Releases (Option 4 & 5):**
   * `RELEASE_REPO` (default: `zylhdrXP/FleurX-Release`) controls the release repository.
-  * Release tag/title are auto-generated using the next available version (`v1.0`, `v1.1`, `v1.2`, ...).
+  * Release tag/title are auto-generated using the next available version (`v1.0`, `v1.1`, ...).
 
 ## Repository Information
 
 * **Target Device:** Xiaomi SM7435 (Garnet)
-* **Kernel Source:** [Fleur-Project](https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435) (Branch: `lineage-23.2`)
+* **Kernel Source:** [Fleur-Project](https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435)
+* **Default Branch:** `lineage-23.2`
 * **Base Version:** 5.10.x
