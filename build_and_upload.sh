@@ -176,6 +176,7 @@ set_variant_from_choice() {
 
 clean_kernel_source() {
     echo "Cleaning up kernel source..."
+    CLEANUP_SKIPPED=0
     cd "$KERNEL_PATH" || terminate 1
 
     if ! git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -193,8 +194,10 @@ clean_kernel_source() {
         else
             read -r -p "Discard local changes and continue? [y/N]: " CONFIRM
             if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-                echo "Aborted."
-                terminate 1
+                echo "Skipping cleanup. Continuing with existing source."
+                CLEANUP_SKIPPED=1
+                cd - > /dev/null
+                return 0
             fi
             DIRTY_OK=1
         fi
@@ -314,7 +317,11 @@ build_variant() {
     if [ "${SKIP_BUILD:-0}" != "1" ]; then
         clean_kernel_source
         HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
-        apply_variant_choice "$choice"
+        if [ "${CLEANUP_SKIPPED:-0}" = "1" ]; then
+            echo "Using existing kernel source; skipping variant setup."
+        else
+            apply_variant_choice "$choice"
+        fi
         build_kernel
     else
         HEAD_COMMIT="$(git -C "$KERNEL_PATH" rev-parse HEAD)"
