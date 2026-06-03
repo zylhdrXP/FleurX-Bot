@@ -214,17 +214,17 @@ apply_variant_choice() {
     cd "$KERNEL_PATH" || terminate 1
     if [ "$choice" == "1" ]; then
         echo "Setting up KSUN with SUSFS..."
-        curl -fsSL "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-        git clone --depth=1 -b gki-android12-5.10 https://gitlab.com/simonpunk/susfs4ksu.git
+        curl -fsSL "$KSUN_SUSFS_SETUP_URL" | bash -s "$KSUN_SUSFS_SETUP_BRANCH"
+        git clone --depth=1 -b "$SUSFS_REPO_BRANCH" "$SUSFS_REPO_URL"
         cp susfs4ksu/kernel_patches/fs/* fs/
         cp susfs4ksu/kernel_patches/include/linux/* include/linux/
-        cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch .
-        patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
+        cp "susfs4ksu/kernel_patches/$SUSFS_PATCH_NAME" .
+        patch -p1 < "$SUSFS_PATCH_NAME"
     elif [ "$choice" == "2" ]; then
         echo "Applying Droidspaces cherry-picks and KSU-Next setup..."
-        git fetch origin droidspaces
-        git cherry-pick fa49a18078eb34467f924a848f9e6a23ef4835d7^..31cc9c443048e0e830b08b47953739eea6460402
-        curl -fsSL "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s dev
+        git fetch origin "$DROIDSPACES_REMOTE_BRANCH"
+        git cherry-pick "$DROIDSPACES_CHERRY_PICK_RANGE"
+        curl -fsSL "$KSU_NEXT_SETUP_URL" | bash -s "$KSU_NEXT_SETUP_BRANCH"
     elif [ "$choice" == "3" ]; then
         echo "Vanilla variant selected. Staying on clean source."
     fi
@@ -249,7 +249,7 @@ prepare_anykernel_dir() {
     if [ -d "$ANYKERNEL_DIR" ]; then
         rm -rf "$ANYKERNEL_DIR"
     fi
-    git clone --depth=1 "https://github.com/zylhdrXP/AnyKernel3" "$ANYKERNEL_DIR"
+    git clone --depth=1 "$ANYKERNEL_URL" "$ANYKERNEL_DIR"
 }
 
 package_zip() {
@@ -357,6 +357,15 @@ else
     die ".env file not found. Please create one with BOT_TOKEN and CHAT_ID."
 fi
 
+# Load configuration
+CONFIG_FILE="$SCRIPT_DIR/config.sh"
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+else
+    die "config.sh not found. Please ensure it exists."
+fi
+
 if [ -z "${BOT_TOKEN:-}" ] || [ -z "${CHAT_ID:-}" ]; then
     die "BOT_TOKEN and CHAT_ID must be set in .env."
 fi
@@ -366,20 +375,10 @@ require_cmd curl
 require_cmd zip
 require_cmd patch
 
-STATE_REPO_PATH="${STATE_REPO_PATH:-$SCRIPT_DIR}"
-STATE_FILE="${STATE_FILE:-$STATE_REPO_PATH/.state/last_kernel_build_commit}"
-STATE_REMOTE="${STATE_REMOTE:-origin}"
-STATE_BRANCH="${STATE_BRANCH:-}"
-STATE_AUTO_PUSH="${STATE_AUTO_PUSH:-1}"
 STATE_FILE_REL="${STATE_FILE#$STATE_REPO_PATH/}"
 if [ "$STATE_FILE_REL" = "$STATE_FILE" ]; then
     die "STATE_FILE must be inside STATE_REPO_PATH."
 fi
-
-CHANGELOG_MAX_LINES="${CHANGELOG_MAX_LINES:-20}"
-CHANGELOG_MAX_CHARS="${CHANGELOG_MAX_CHARS:-900}"
-CHANGELOG_FALLBACK_COMMITS="${CHANGELOG_FALLBACK_COMMITS:-30}"
-RELEASE_REPO="${RELEASE_REPO:-zylhdrXP/FleurX-Release}"
 
 # 1. Variant Selection
 echo "Select Kernel Variant:"
@@ -434,17 +433,7 @@ else
 fi
 echo "------------------------------------------"
 
-# 2. Kernel Source Preparation (Unified Cleanup)
-KERNEL_PATH="$ROOT_DIR/kernel/xiaomi/sm7435"
-if git -C "$KERNEL_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    BASE_BRANCH="$(git -C "$KERNEL_PATH" rev-parse --abbrev-ref HEAD)"
-    if [ "$BASE_BRANCH" = "HEAD" ] || [ -z "$BASE_BRANCH" ]; then
-        BASE_BRANCH="lineage-23.2"
-    fi
-else
-    BASE_BRANCH="lineage-23.2"
-fi
-
+# 2. Kernel Source Preparation
 if [ ! -d "$KERNEL_PATH" ]; then
     die "Error: Kernel path $KERNEL_PATH not found!"
 fi
@@ -460,21 +449,7 @@ else
 fi
 
 # 4. Packaging & Upload Setup
-MAKEFILE_PATH="$ROOT_DIR/kernel/xiaomi/sm7435/Makefile"
-CHANGELOG_GITHUB_URL="https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/lineage-23.2/"
-
-if [ -f "$MAKEFILE_PATH" ]; then
-    VERSION="$(awk -F' = ' '/^SUBLEVEL =/ {print $2; exit}' "$MAKEFILE_PATH")"
-else
-    VERSION="256"
-fi
-if [ -z "$VERSION" ]; then
-    VERSION="256"
-fi
-
 DATE=$(date +"%d%m%y")
-KERNEL_IMG="$ROOT_DIR/out/target/product/garnet/kernel"
-ANYKERNEL_DIR="$ROOT_DIR/AnyKernel3"
 if [ "$BUILD_ALL" -eq 1 ]; then
     RELEASE_VERSION="$(get_next_release_version)"
     if [ "$SKIP_BUILD" != "1" ]; then
