@@ -39,6 +39,8 @@ PASTEBIN_API_KEY="your_pastebin_api_key" # optional, used for long changelogs
 GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for releases and versioning
 ```
 
+3. (Optional) Customize the build by editing `config.sh`. This file contains all the paths, branches, and repository URLs used by the script.
+
 ## Usage
 
 1. Initialize your build environment:
@@ -67,33 +69,50 @@ GH_TOKEN="your_github_token" # or use GITHUB_TOKEN, required for releases and ve
 * **Option 4:** Builds all variants sequentially and creates a full GitHub Release + Telegram announcement.
 * **Option 5:** Skips all build steps. Prompts to upload a single ZIP to Telegram or all variants to a new GitHub Release.
 
-## Adapting for Other Devices
+## Configuration Reference (`config.sh`)
 
-Update the following variables in `build_and_upload.sh` to match your environment:
+The `config.sh` file centralizes all variables. Below is a complete reference of the available configuration options:
 
-* **Kernel Source & Branch:**
-  * `KERNEL_PATH`: Change path to your device's kernel path.
-  * `Cherry-Picking Droidspaces`: [Check commits here](https://github.com/Fleur-Project/android_kernel_xiaomi_sm7435/commits/droidspaces/) and update the range in `apply_variant_choice` if needed.
-  * `BASE_BRANCH`: Now automatically detected via `git rev-parse`. Fallback defaults to `lineage-23.2`.
-* **Build Paths & Naming:**
-  * `KERNEL_IMG`: Update to your device's kernel output path (e.g., `out/target/product/codename/kernel`).
-  * `MAKEFILE_PATH`: Ensure this points to the `Makefile` inside your target `KERNEL_PATH`.
-  * `ZIP_NAME`: Modify the base name (e.g., `FleurX`) in `build_variant`.
-* **AnyKernel3 Repository:**
-  * Update the URL in `prepare_anykernel_dir`.
-* **Telegram Integration:**
-  * `CHANGELOG_GITHUB_URL`: Update the link to point to your repository's commit history.
+### Kernel Configuration
+* `KERNEL_PATH`: Path to the kernel source directory.
+* `BASE_BRANCH`: The base branch to sync and build from (e.g., `lineage-23.2`). Auto-detected if not set.
+* `MAKEFILE_PATH`: Path to the kernel `Makefile` for version extraction.
+* `KERNEL_IMG`: Path to the compiled kernel binary (e.g., `Image` or `Image.gz-dtb`).
+* `VERSION`: Manual override for the kernel sublevel version (e.g., `256` for `5.10.256`). Auto-detected from `Makefile` if not set.
 
-* **Changelog Automation (Optional):**
-  * The script tracks the last built commit in `.state/last_kernel_build_commit` and can auto-push it.
-  * `STATE_REPO_PATH` (default: script directory) controls where the state file is stored.
-  * `STATE_REMOTE` (default: `origin`) and `STATE_BRANCH` control where the state is pushed.
-  * `STATE_AUTO_PUSH=0` disables auto-commit/push.
-  * `CHANGELOG_MAX_LINES` (default 20) and `CHANGELOG_MAX_CHARS` (default 900) control when it uploads to Pastebin.
-  * `CHANGELOG_FALLBACK_COMMITS` (default 30) is used when no prior build commit exists.
-* **GitHub Releases (Option 4 & 5):**
-  * `RELEASE_REPO` (default: `zylhdrXP/FleurX-Release`) controls the release repository.
-  * Release tag/title are auto-generated using the next available version (`v1.0`, `v1.1`, ...).
+### Variant-Specific Setup
+* **KSUN + SUSFS (Choice 1):**
+  * `KSUN_SUSFS_SETUP_URL`: URL for the KernelSU-Next + SUSFS setup script.
+  * `KSUN_SUSFS_SETUP_BRANCH`: Branch/argument for the setup script.
+  * `SUSFS_REPO_URL`: Repository URL for SUSFS patches.
+  * `SUSFS_REPO_BRANCH`: Branch for the SUSFS repository.
+  * `SUSFS_PATCH_NAME`: Filename of the specific SUSFS patch to apply.
+* **KSUN-Droidspaces (Choice 2):**
+  * `DROIDSPACES_REMOTE_BRANCH`: Remote branch containing Droidspaces commits.
+  * `DROIDSPACES_CHERRY_PICK_RANGE`: Git revision range for Droidspaces cherry-picks.
+  * `KSU_NEXT_SETUP_URL`: URL for the standard KernelSU-Next setup script.
+  * `KSU_NEXT_SETUP_BRANCH`: Branch/argument for the KSU-Next setup script.
+
+### AnyKernel3 & Packaging
+* `ANYKERNEL_URL`: Git URL for the AnyKernel3 repository used for zipping.
+* `ANYKERNEL_DIR`: Local directory where AnyKernel3 will be cloned.
+
+### GitHub & Telegram Integration
+* `RELEASE_REPO`: The `owner/repo` path for creating GitHub Releases.
+* `CHANGELOG_GITHUB_URL`: Base URL for the GitHub commit history (used in release notes).
+* `PASTEBIN_API_KEY`: Required if you want to upload long changelogs to Pastebin.
+
+### State & Changelog Management
+* `STATE_REPO_PATH`: Path to the git repository tracking the build state.
+* `STATE_FILE`: Absolute path to the file storing the last successful build's commit hash.
+* `STATE_REMOTE`: Git remote to push state updates to.
+* `STATE_BRANCH`: Git branch to push state updates to (auto-detected if empty).
+* `STATE_AUTO_PUSH`: Set to `1` to enable automatic commit and push of the state file.
+* `CHANGELOG_MAX_LINES`: Maximum number of lines in a changelog before it's moved to a paste service.
+* `CHANGELOG_MAX_CHARS`: Maximum character count for Telegram messages.
+* `CHANGELOG_FALLBACK_COMMITS`: Number of commits to show if no previous build state is found.
+
+
 
 ## Repository Information
 
